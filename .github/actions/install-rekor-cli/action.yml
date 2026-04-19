@@ -57,6 +57,12 @@ runs:
           echo "${LOGNAME}: INFO -" "${@}"
         }
 
+        # Expand a leading literal "$HOME" in the action's default install-dir
+        # value without invoking `eval`. Passing inputs through env vars disables
+        # the shell's recursive expansion, so we do a bounded bash substitution
+        # limited to the "$HOME" prefix only.
+        INSTALL_DIR="${INSTALL_DIR/#\$HOME/$HOME}"
+
         mkdir -p "${INSTALL_DIR}"
         trap "popd >/dev/null" EXIT
         pushd "${INSTALL_DIR}" > /dev/null
@@ -132,11 +138,24 @@ runs:
     - if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
       env:
         INSTALL_DIR: ${{ inputs.install-dir }}
-      run: echo "${INSTALL_DIR}" >> "$GITHUB_PATH"
+      run: |
+        # Mirror the "$HOME" prefix expansion from the install step so the
+        # path written to GITHUB_PATH matches where the binary was actually
+        # installed.
+        INSTALL_DIR="${INSTALL_DIR/#\$HOME/$HOME}"
+        echo "${INSTALL_DIR}" >> "$GITHUB_PATH"
       shell: bash
 
     - if: ${{ runner.os == 'Windows' }}
       env:
         INSTALL_DIR: ${{ inputs.install-dir }}
-      run: echo "$env:INSTALL_DIR" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      run: |
+        # PowerShell does not auto-expand "$HOME" inside an env-var string,
+        # so mirror the bash-side expansion when the input starts with the
+        # literal "$HOME" prefix.
+        $expanded = $env:INSTALL_DIR
+        if ($expanded.StartsWith('$HOME')) {
+          $expanded = $env:HOME + $expanded.Substring('$HOME'.Length)
+        }
+        $expanded | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       shell: pwsh
