@@ -473,7 +473,10 @@ export_signature_file() {
 shred_private_key() {
   local private_key_path="$(get_private_key_path)"
 
-  if ! shred_cmd -u "${private_key_path}"; then
+  # -f forces shred to chmod the file writable before overwriting; required
+  # because save_private_key_to_file sets mode 0400 and the entrypoint runs
+  # as a non-root user (Dockerfile USER 1001) that cannot bypass DAC checks.
+  if ! shred_cmd -fu "${private_key_path}"; then
     log_error "Encountered an error when destroying the private key ${private_key_path}," \
       "exiting..."
     exit 1
