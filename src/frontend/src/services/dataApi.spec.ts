@@ -366,7 +366,7 @@ describe('dataApi', () => {
       const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
       const anchor = document.createElement('a')
       const clickSpy = vi.spyOn(anchor, 'click').mockImplementation(() => undefined)
-      vi.spyOn(document, 'createElement').mockReturnValue(anchor)
+      const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(anchor)
       await api.downloadFile('/x.bin', 'out.bin')
       expect(anchor.href).toContain('blob:abc')
       expect(anchor.download).toBe('out.bin')
@@ -375,6 +375,7 @@ describe('dataApi', () => {
       createObjectURL.mockRestore()
       revokeObjectURL.mockRestore()
       clickSpy.mockRestore()
+      createElementSpy.mockRestore()
     })
   })
 
