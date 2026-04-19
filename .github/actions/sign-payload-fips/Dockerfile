@@ -27,8 +27,14 @@ ENV LC_ALL=C.UTF-8
 RUN dnf install -y \
     openssl && \
     # Cleanup
-    dnf clean all
+    dnf clean all && \
+    # Create a non-root user to satisfy DS-0002 / CWE-269. The entrypoint
+    # only reads inputs from CLI args, invokes openssl, and writes to a
+    # temporary directory, so it does not need root at runtime.
+    useradd -u 1001 -r -s /sbin/nologin -d /home/appuser -m appuser
 
 COPY --chown=root:root --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+
+USER 1001
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
