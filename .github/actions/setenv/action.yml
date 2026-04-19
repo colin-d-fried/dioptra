@@ -25,6 +25,9 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - run: |
-        sed "/^#/d" ${{ inputs.env-path }} >> $GITHUB_ENV
+    - env:
+        ENV_PATH: ${{ inputs.env-path }}
+      run: |
+        # shellcheck disable=SC2086 # ENV_PATH may intentionally expand to a glob of multiple .env files
+        sed "/^#/d" ${ENV_PATH} >> "$GITHUB_ENV"
       shell: bash
