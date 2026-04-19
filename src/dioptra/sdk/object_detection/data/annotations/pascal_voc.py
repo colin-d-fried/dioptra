@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union, cast
 from xml.etree import ElementTree
 
+import defusedxml.ElementTree
 import structlog
 from structlog.stdlib import BoundLogger
 
@@ -52,7 +53,11 @@ class PascalVOCAnnotationData(AnnotationData):
     ) -> Tuple[list[list[float]], list[int]]:
         # Load and parse the file
         filepath = filepath.decode() if isinstance(filepath, bytes) else str(filepath)
-        tree = ElementTree.parse(filepath)
+        # Use defusedxml to guard against XML external entity / billion-laughs
+        # attacks when reading untrusted Pascal VOC annotation files. The
+        # returned ElementTree still yields stdlib xml.etree Elements, so the
+        # Element type annotations below remain correct.
+        tree = defusedxml.ElementTree.parse(filepath)
 
         # Get the root of the document
         root = tree.getroot()
