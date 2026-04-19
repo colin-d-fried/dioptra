@@ -549,9 +549,13 @@ def _load_json(filepath: Path) -> Any:
 
 
 def _unpack(source: Path, dest: Path, log: BoundLogger) -> None:
-    # Unpack the (trusted) tar.gz file
+    # Unpack the (trusted) tar.gz file.
+    # filter="data" is the PEP 706 extraction filter introduced in Python 3.12;
+    # it rejects absolute paths, paths containing ".." components, device
+    # files, and dangerous symlinks, which is the mitigation the Semgrep rule
+    # asks for.
     try:
-        with tarfile.open(source, mode="r:*") as tar:
+        with tarfile.open(source, mode="r:*") as tar:  # nosemgrep: trailofbits.python.tarfile-extractall-traversal.tarfile-extractall-traversal
             tar.extractall(path=dest, filter="data")
     except Exception as e:
         log.exception(f"Could not extract from tar file {source.as_posix()}")

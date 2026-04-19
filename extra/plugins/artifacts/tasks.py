@@ -128,7 +128,11 @@ class DirectoryArtifactTask(ArtifactTaskInterface):
     def deserialize(working_dir: Path, path: str, **kwargs) -> Path:
         name: str
         try:
-            with tarfile.open(Path(working_dir, path), mode="r:*") as tar:
+            # filter="data" is the PEP 706 extraction filter introduced in
+            # Python 3.12; it rejects absolute paths, paths containing ".."
+            # components, device files, and dangerous symlinks, which is the
+            # mitigation the Semgrep rule asks for.
+            with tarfile.open(Path(working_dir, path), mode="r:*") as tar:  # nosemgrep: trailofbits.python.tarfile-extractall-traversal.tarfile-extractall-traversal
                 tar.extractall(path=working_dir, filter="data")
                 names = tar.getnames()
                 if len(names) < 1:
