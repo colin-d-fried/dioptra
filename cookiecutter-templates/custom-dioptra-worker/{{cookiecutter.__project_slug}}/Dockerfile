@@ -23,7 +23,12 @@
 
 FROM ghcr.io/astral-sh/uv:debian AS base
 
-USER root
+# The final stage at the bottom of this file drops to USER ${DIOPTRA_UID}
+# (see below), so this Dockerfile does not ship a root container. Semgrep's
+# last-user-is-root rule cannot model the multi-stage "final stage wins"
+# semantics, so we explicitly suppress the false positive on the intermediate
+# base stage.
+USER root  # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
