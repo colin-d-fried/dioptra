@@ -37,7 +37,11 @@ runs:
     - name: Validate tag against pyproject.toml
       id: validate
       shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_TAG: ${{ inputs.tag }}
+        STRIP_V_PREFIX_FLAG: ${{ inputs.strip-v-prefix == 'true' && '--strip-v-prefix' || '' }}
       run: |
-        python "${{ github.action_path }}/validate.py" \
-          --tag "${{ inputs.tag }}" \
-          ${{ inputs.strip-v-prefix == 'true' && '--strip-v-prefix' || '' }}
+        python "${ACTION_PATH}/validate.py" \
+          --tag "${INPUT_TAG}" \
+          ${STRIP_V_PREFIX_FLAG}

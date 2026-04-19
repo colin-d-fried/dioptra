@@ -35,6 +35,12 @@ runs:
   steps:
     - name: Install rekor-cli
       shell: bash
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+        USE_SUDO: ${{ inputs.use-sudo }}
+        REKOR_RELEASE: ${{ inputs.rekor-release }}
+        RUNNER_OS_SAFE: ${{ runner.os }}
+        RUNNER_ARCH_SAFE: ${{ runner.arch }}
       run: |
         #!/usr/bin/env bash
         shopt -s expand_aliases
@@ -51,13 +57,13 @@ runs:
           echo "${LOGNAME}: INFO -" "${@}"
         }
 
-        mkdir -p ${{ inputs.install-dir }}
+        mkdir -p "${INSTALL_DIR}"
         trap "popd >/dev/null" EXIT
-        pushd ${{ inputs.install-dir }} > /dev/null
+        pushd "${INSTALL_DIR}" > /dev/null
 
-        case ${{ runner.os }} in
+        case "${RUNNER_OS_SAFE}" in
           Linux | linux)
-            case ${{ runner.arch }} in
+            case "${RUNNER_ARCH_SAFE}" in
               X64 | amd64)
                 source_filename='rekor-cli-linux-amd64'
                 ;;
@@ -71,14 +77,14 @@ runs:
                 ;;
 
               *)
-                log_error "unsupported architecture ${{ runner.arch }}"
+                log_error "unsupported architecture ${RUNNER_ARCH_SAFE}"
                 exit 1
                 ;;
             esac
             ;;
 
           macOS|macos)
-            case ${{ runner.arch }} in
+            case "${RUNNER_ARCH_SAFE}" in
               X64|amd64)
                 source_filename='rekor-cli-darwin-amd64'
                 ;;
@@ -88,45 +94,49 @@ runs:
                 ;;
 
               *)
-                log_error "unsupported architecture ${{ runner.arch }}"
+                log_error "unsupported architecture ${RUNNER_ARCH_SAFE}"
                 exit 1
                 ;;
             esac
             ;;
 
           Windows|windows)
-            case ${{ runner.arch }} in
+            case "${RUNNER_ARCH_SAFE}" in
               X64|amd64)
                 source_filename='rekor-cli-windows-amd64.exe'
                 rekor_executable_name=rekor-cli.exe
                 ;;
               *)
-                log_error "unsupported architecture ${{ runner.arch }}"
+                log_error "unsupported architecture ${RUNNER_ARCH_SAFE}"
                 exit 1
                 ;;
             esac
             ;;
           *)
-            log_error "unsupported os ${{ runner.os }}"
+            log_error "unsupported os ${RUNNER_OS_SAFE}"
             exit 1
             ;;
         esac
 
         SUDO=
-        if [[ "${{ inputs.use-sudo }}" == "true" ]] && command -v sudo >/dev/null; then
+        if [[ "${USE_SUDO}" == "true" ]] && command -v sudo >/dev/null; then
           SUDO=sudo
         fi
 
-        log_info "Downloading version '${{ inputs.rekor-release }}' of rekor-cli to be installed..."
-        log_info "https://github.com/sigstore/rekor/releases/download/${{ inputs.rekor-release }}/${source_filename}"
-        $SUDO curl -fsL https://github.com/sigstore/rekor/releases/download/${{ inputs.rekor-release }}/${source_filename} -o ${rekor_executable_name}
-        $SUDO chmod +x ${rekor_executable_name}
+        log_info "Downloading version '${REKOR_RELEASE}' of rekor-cli to be installed..."
+        log_info "https://github.com/sigstore/rekor/releases/download/${REKOR_RELEASE}/${source_filename}"
+        $SUDO curl -fsL "https://github.com/sigstore/rekor/releases/download/${REKOR_RELEASE}/${source_filename}" -o "${rekor_executable_name}"
+        $SUDO chmod +x "${rekor_executable_name}"
         log_info "Installation complete!"
 
     - if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
-      run: echo "${{ inputs.install-dir }}" >> $GITHUB_PATH
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: echo "${INSTALL_DIR}" >> "$GITHUB_PATH"
       shell: bash
 
     - if: ${{ runner.os == 'Windows' }}
-      run: echo "${{ inputs.install-dir }}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+      run: echo "$env:INSTALL_DIR" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       shell: pwsh
