@@ -827,3 +827,79 @@ def test_password_change_rejects_reused_history(
         next_password, original_password
     )
     assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+@freeze_time("Apr 1st, 2025 7:30am", auto_tick_seconds=1)
+def test_password_history_retains_full_depth_after_many_rotations(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+    monkeypatch: Any,
+) -> None:
+    """Regression: history must not be prematurely trimmed.
+
+    The initial Phase 1 implementation double-added each new entry to the
+    ``user.password_history`` collection (once via SQLAlchemy's
+    ``back_populates`` on construction, then again via an explicit
+    ``list.insert(0, entry)``). Combined with ``cascade=delete-orphan`` on
+    the ``User.password_history`` relationship, the inflated list length
+    caused the trim step to mark valid, still-in-window history rows as
+    orphans and delete them from the database.
+
+    This test shrinks ``PASSWORD_HISTORY_DEPTH`` so a few rotations are
+    enough to cross the trim threshold, then verifies that:
+
+    1. Every password within the depth window is still blocked on reuse.
+    2. The oldest password, which SHOULD be outside the window after
+       rotation, is accepted again — proving the trim itself works but is
+       not over-eager.
+    """
+    from dioptra.restapi.v1.users import service as users_service
+
+    monkeypatch.setattr(users_service, "PASSWORD_HISTORY_DEPTH", 3)
+
+    current = auth_account["password"]
+    rotations = [
+        "Rotation!NumberOne2025",
+        "Rotation!NumberTwo2025",
+        "Rotation!NumberThree2025",
+        "Rotation!NumberFour2025",
+    ]
+
+    # Walk through 4 rotations with depth=3 (buggy code would orphan-delete
+    # entries during this sequence).
+    for pwd in rotations:
+        assert (
+            dioptra_client.users.change_current_user_password(
+                current, pwd
+            ).status_code
+            == HTTPStatus.OK
+        )
+        assert (
+            dioptra_client.auth.login(
+                auth_account["username"], pwd
+            ).status_code
+            == HTTPStatus.OK
+        )
+        current = pwd
+
+    # The last 3 in-window passwords (the starting password is now out of
+    # window) MUST be blocked on reuse.
+    for in_window in rotations[:3]:
+        response = dioptra_client.users.change_current_user_password(
+            current, in_window
+        )
+        assert response.status_code == HTTPStatus.FORBIDDEN, (
+            f"Expected reuse of in-window password {in_window!r} to be "
+            f"rejected with 403, got {response.status_code}. This means the "
+            f"history was prematurely trimmed."
+        )
+
+    # The original password is now OUT of the 3-deep window, so it must be
+    # accepted again. (If it weren't, the trim would be broken in the other
+    # direction — never letting anything out of history.)
+    assert (
+        dioptra_client.users.change_current_user_password(
+            current, auth_account["password"]
+        ).status_code
+        == HTTPStatus.OK
+    )

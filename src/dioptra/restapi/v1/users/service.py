@@ -576,14 +576,24 @@ class UserPasswordService(object):
         return {"status": "Password Change Success", "username": user.username}
 
     def _record_password_history(self, user: models.User, hashed_password: str) -> None:
-        """Append a password hash to the user's history and trim to the configured depth."""
+        """Append a password hash to the user's history and trim to the configured depth.
+
+        Constructing ``PasswordHistory(user=user)`` triggers SQLAlchemy's
+        ``back_populates`` machinery and appends the new entry to
+        ``user.password_history`` automatically; no explicit append/insert is
+        needed (a previous bug double-added the entry, inflating the list
+        length and causing premature trimming with cascade=delete-orphan to
+        remove still-valid history rows). Trimming is done against the oldest
+        entries (by ``created_on``) so it is robust to in-memory ordering
+        differences between append-order (during a single unit of work) and
+        the relationship's ``order_by`` (which applies on reload).
+        """
         entry = models.PasswordHistory(hashed_password=hashed_password, user=user)
-        user.password_history.insert(0, entry)
         self._uow.session.add(entry)
-        # password_history is ordered newest-first via relationship order_by;
-        # trim anything past the configured depth.
-        if len(user.password_history) > PASSWORD_HISTORY_DEPTH:
-            for stale in user.password_history[PASSWORD_HISTORY_DEPTH:]:
+        overflow = len(user.password_history) - PASSWORD_HISTORY_DEPTH
+        if overflow > 0:
+            ordered = sorted(user.password_history, key=lambda e: e.created_on)
+            for stale in ordered[:overflow]:
                 user.password_history.remove(stale)
 
     def hash(self, password: str, **kwargs) -> str:
