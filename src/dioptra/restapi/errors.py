@@ -19,6 +19,7 @@
 .. |Api| replace:: :py:class:`flask_restx.Api`
 """
 
+import datetime  # noqa: F401  (used in type annotations)
 import http
 import typing
 
@@ -563,6 +564,42 @@ class UserPasswordError(DioptraError):
         super().__init__(message)
 
 
+class UserPasswordExpiredError(UserPasswordError):
+    """The supplied password is correct but has passed its expiration date."""
+
+    def __init__(self, message: str = "Password expired."):
+        super().__init__(message)
+
+
+class PasswordComplexityError(DioptraError):
+    """The supplied password did not meet the configured complexity rules."""
+
+    def __init__(self, reasons: list[str]):
+        self.reasons = list(reasons)
+        super().__init__(
+            "Password does not meet complexity requirements: " + "; ".join(self.reasons)
+        )
+
+
+class AccountLockedError(DioptraError):
+    """The user's account is locked due to too many failed login attempts.
+
+    The ``username`` and ``locked_until`` attributes are retained for
+    server-side audit logging but MUST NOT be included in the HTTP response
+    sent to the client: leaking the exact unlock timestamp lets an attacker
+    performing credential stuffing resume automated attempts the moment
+    the lockout expires, and confirming the username exists aids
+    enumeration. The error handler therefore returns the same generic
+    UNAUTHORIZED response as ``UserPasswordError`` so locked accounts are
+    indistinguishable from wrong-password responses to external observers.
+    """
+
+    def __init__(self, username: str, locked_until: "datetime.datetime"):
+        self.username = username
+        self.locked_until = locked_until
+        super().__init__("Password authentication failed.")
+
+
 class JobStoreError(DioptraError):
     """JobStoreError Error."""
 
@@ -889,10 +926,47 @@ def register_error_handlers(api: Api, **kwargs) -> None:  # noqa: C901
         log.debug(error.to_message())
         return error_result(error, http.HTTPStatus.FORBIDDEN, {})
 
+    @api.errorhandler(UserPasswordExpiredError)
+    def handle_user_password_expired_error(error: UserPasswordExpiredError):
+        # A "password expired" response tells an attacker the supplied
+        # credentials are valid (just stale). Wrap in a generic
+        # UserPasswordError so the JSON body — including the serialized
+        # ``error`` class name and the ``message`` — is byte-for-byte
+        # identical to a plain wrong-password 401. Must be registered before
+        # the UserPasswordError handler so flask-restx matches the more
+        # specific subclass first.
+        log.debug(error.to_message())
+        generic = UserPasswordError("Password authentication failed.")
+        return error_result(generic, http.HTTPStatus.UNAUTHORIZED, {})
+
     @api.errorhandler(UserPasswordError)
     def handle_user_password_error(error: UserPasswordError):
         log.debug(error.to_message())
         return error_result(error, http.HTTPStatus.UNAUTHORIZED, {})
+
+    @api.errorhandler(PasswordComplexityError)
+    def handle_password_complexity_error(error: PasswordComplexityError):
+        log.debug(error.to_message())
+        return error_result(
+            error, http.HTTPStatus.BAD_REQUEST, {"reasons": list(error.reasons)}
+        )
+
+    @api.errorhandler(AccountLockedError)
+    def handle_account_locked_error(error: AccountLockedError):
+        # Log the structured lockout info server-side only; the response MUST
+        # NOT include the username or the lockout expiry (see AccountLockedError
+        # docstring for rationale). We also forward the response through a
+        # generic UserPasswordError so ``error_result`` serializes
+        # ``error.__class__.__name__`` as ``"UserPasswordError"`` — otherwise
+        # ``"AccountLockedError"`` would leak the lockout state in the
+        # ``error`` field of the JSON response and defeat indistinguishability.
+        log.debug(
+            "account locked login rejected",
+            username=error.username,
+            locked_until=error.locked_until.isoformat(),
+        )
+        generic = UserPasswordError("Password authentication failed.")
+        return error_result(generic, http.HTTPStatus.UNAUTHORIZED, {})
 
     @api.errorhandler(JobStoreError)
     def handle_mlflow_error(error: JobStoreError):

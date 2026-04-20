@@ -27,7 +27,15 @@
           outlined
           label="Password"
           :type="showPassword ? 'text' : 'password'"
-          :rules="[requiredRule]"
+          :rules="[
+            requiredRule,
+            minLengthRule,
+            uppercaseRule,
+            lowercaseRule,
+            digitRule,
+            specialCharRule,
+          ]"
+          hint="At least 15 characters, including upper and lower case letters, a digit, and a special character."
           v-model="password"
           aria-required="true"
         >
@@ -39,6 +47,24 @@
             />
           </template>
         </q-input>
+        <q-list dense class="q-mb-sm text-caption">
+          <q-item-label caption>Password must contain:</q-item-label>
+          <q-item dense>
+            <q-item-section>- At least 15 characters</q-item-section>
+          </q-item>
+          <q-item dense>
+            <q-item-section>- An uppercase letter (A-Z)</q-item-section>
+          </q-item>
+          <q-item dense>
+            <q-item-section>- A lowercase letter (a-z)</q-item-section>
+          </q-item>
+          <q-item dense>
+            <q-item-section>- A digit (0-9)</q-item-section>
+          </q-item>
+          <q-item dense>
+            <q-item-section>- A special character (e.g. !@#$%^&amp;*)</q-item-section>
+          </q-item>
+        </q-list>
         <q-input
           class="q-mb-md"
           outlined
@@ -96,6 +122,17 @@
     const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$/;
     return (val && emailRegex.test(val)) || "Invalid email address";
   };
+  const minLengthRule = (val) =>
+    (val && val.length >= 15) || "Password must be at least 15 characters long";
+  const uppercaseRule = (val) =>
+    /[A-Z]/.test(val || "") || "Password must contain an uppercase letter";
+  const lowercaseRule = (val) =>
+    /[a-z]/.test(val || "") || "Password must contain a lowercase letter";
+  const digitRule = (val) =>
+    /\d/.test(val || "") || "Password must contain a digit";
+  const specialCharRule = (val) =>
+    /[!-/:-@\[-`{-~]/.test(val || "") ||
+    "Password must contain a special character";
 
   const username = ref('');
   const password = ref('');

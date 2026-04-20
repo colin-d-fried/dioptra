@@ -20,8 +20,11 @@ This module contains a set of tests that validate the CRUD operations and additi
 functionalities for the user entity. The tests ensure that the users can be registered,
 modified, and deleted as expected through the REST API.
 """
+
 from http import HTTPStatus
 from typing import Any
+
+from freezegun import freeze_time
 
 from dioptra.client.base import DioptraResponseProtocol
 from dioptra.client.client import DioptraClient
@@ -178,7 +181,7 @@ def assert_registering_existing_username_fails(
     Raises:
         AssertionError: If the response status code is not 409.
     """
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
     response = dioptra_client.users.create(
         username=existing_username, email=non_existing_email, password=password
     )
@@ -199,7 +202,7 @@ def assert_registering_existing_email_fails(
     Raises:
         AssertionError: If the response status code is not 409.
     """
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
     response = dioptra_client.users.create(
         username=non_existing_username, email=existing_email, password=password
     )
@@ -408,7 +411,7 @@ def test_create_user(dioptra_client: DioptraClient[DioptraResponseProtocol]) -> 
     """
     username = "user"
     email = "user@example.org"
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
 
     # Posting a user returns CurrentUserSchema.
     user_response = dioptra_client.users.create(username, email, password).json()
@@ -597,7 +600,7 @@ def test_change_current_user_password(
     """
     username = auth_account["username"]
     old_password = auth_account["password"]
-    new_password = "new_password"
+    new_password = "NewSecure!Pwd456789"
     dioptra_client.users.change_current_user_password(old_password, new_password)
     assert_login_works(dioptra_client, username=username, password=new_password)
 
@@ -617,7 +620,7 @@ def test_change_user_password(
     user_id = registered_users["user2"]["id"]
     username = registered_users["user2"]["username"]
     old_password = registered_users["user2"]["password"]
-    new_password = "new_password"
+    new_password = "NewSecure!Pwd456789"
     dioptra_client.users.change_password_by_id(user_id, old_password, new_password)
     assert_login_works(dioptra_client, username=username, password=new_password)
 
@@ -642,3 +645,295 @@ def test_new_password_cannot_be_existing(
     assert_new_password_cannot_be_existing(dioptra_client, password)
     # test via /users/{user_id}
     assert_new_password_cannot_be_existing(dioptra_client, password, user_id)
+
+
+def test_cannot_register_with_weak_password(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+) -> None:
+    """Test that registering with a password that fails complexity rules is rejected."""
+    response = dioptra_client.users.create(
+        username="weakpwuser",
+        email="weakpwuser@example.org",
+        password="weakpass",
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+@freeze_time("Apr 1st, 2025 6:00am", auto_tick_seconds=1)
+def test_account_is_locked_after_repeated_failed_logins(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """Test that repeated failed login attempts lock the account.
+
+    The default lockout threshold is 5 failed attempts; after that, a correct
+    password should still be rejected with UNAUTHORIZED until the lockout expires.
+    """
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = correct_password + "-wrong"
+
+    for _ in range(5):
+        response = dioptra_client.auth.login(username, wrong_password)
+        assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+    # Account should now be locked; even the correct password is rejected.
+    locked_response = dioptra_client.auth.login(username, correct_password)
+    assert locked_response.status_code == HTTPStatus.UNAUTHORIZED
+
+    # Security regression: the response MUST NOT leak the username or the
+    # lockout expiry timestamp (would enable enumeration + lets a credential
+    # stuffer know the exact moment the lockout expires). It must also be
+    # indistinguishable from a plain wrong-password 401.
+    body = locked_response.json()
+    assert "username" not in body.get("detail", {})
+    assert "locked_until" not in body.get("detail", {})
+    message = body.get("message", "")
+    assert username not in message
+    assert "locked" not in message.lower()
+    assert "until" not in message.lower()
+    # The serialized ``error`` field is ``error.__class__.__name__``; if the
+    # handler passes an ``AccountLockedError`` through directly, an attacker
+    # can read ``"AccountLockedError"`` here and distinguish lockout from
+    # wrong-password responses. The handler must forward a generic
+    # ``UserPasswordError`` so the class name matches a plain 401.
+    error_field = body.get("error", "")
+    assert "Locked" not in error_field
+    assert "Account" not in error_field
+
+
+@freeze_time("Apr 1st, 2025 6:30am", auto_tick_seconds=1)
+def test_successful_login_resets_failed_attempts(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """Test that a successful login clears the failed_login_attempts counter."""
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = correct_password + "-wrong"
+
+    # A few bad attempts...
+    for _ in range(3):
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+
+    # ...then a good one resets the counter.
+    assert (
+        dioptra_client.auth.login(username, correct_password).status_code
+        == HTTPStatus.OK
+    )
+
+    # We can fail up to the threshold again without being locked out on the next try.
+    for _ in range(4):
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+    assert (
+        dioptra_client.auth.login(username, correct_password).status_code
+        == HTTPStatus.OK
+    )
+
+
+def test_lockout_expiry_grants_fresh_attempt_window(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """After a lockout window elapses, a single wrong password must NOT immediately re-lock.
+
+    Regression test: previously the counter stayed at 5 after expiry, so the
+    first post-expiry wrong attempt bumped it to 6 >= max_attempts and the
+    account was re-locked with zero tolerance.
+    """
+    user = registered_users["user3"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = "BadGuess!Attempt2025"
+
+    with freeze_time("Apr 1st, 2025 8:00am", auto_tick_seconds=1):
+        for _ in range(5):
+            assert (
+                dioptra_client.auth.login(username, wrong_password).status_code
+                == HTTPStatus.UNAUTHORIZED
+            )
+        # account is now locked
+        assert (
+            dioptra_client.auth.login(username, correct_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+
+    # Advance well past the 30-min default lockout window.
+    with freeze_time("Apr 1st, 2025 9:30am", auto_tick_seconds=1):
+        # A single wrong attempt after expiry must NOT immediately re-lock.
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+        # The counter was reset on expiry, so the correct password still works.
+        assert (
+            dioptra_client.auth.login(username, correct_password).status_code
+            == HTTPStatus.OK
+        )
+
+
+def test_expired_password_does_not_trigger_lockout(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """An expired-but-correct password must not count as a failed login attempt.
+
+    Regression test: previously UserPasswordService.authenticate() raised the
+    same UserPasswordError for both wrong-password and expired-password cases,
+    so an expired correct password would increment failed_login_attempts and
+    eventually lock the account.
+    """
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+
+    # Jump more than a year forward so password_expire_on (now + 1 year) is past.
+    response = None
+    with freeze_time("Jan 1st, 2027 12:00pm", auto_tick_seconds=1):
+        for _ in range(7):
+            response = dioptra_client.auth.login(username, correct_password)
+            assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+        # Account must NOT be locked — counter should not have moved.
+        assert response is not None
+        body = response.json()
+        assert "locked" not in body.get("message", "").lower()
+
+        # Security regression: an expired-but-correct password response must
+        # be indistinguishable from a wrong-password 401, otherwise an
+        # attacker confirms the supplied credentials are valid (just stale).
+        wrong_response = dioptra_client.auth.login(
+            username, correct_password + "-wrong"
+        )
+        assert wrong_response.status_code == HTTPStatus.UNAUTHORIZED
+        wrong_body = wrong_response.json()
+        assert body.get("error") == wrong_body.get("error")
+        assert body.get("message") == wrong_body.get("message")
+        assert body.get("detail") == wrong_body.get("detail")
+        assert "expired" not in body.get("message", "").lower()
+        assert "Expired" not in body.get("error", "")
+
+
+def test_password_change_rejects_weak_password(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+) -> None:
+    """Test that changing the password to one that fails complexity rules is rejected."""
+    response = dioptra_client.users.change_current_user_password(
+        auth_account["password"], "short"
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+@freeze_time("Apr 1st, 2025 7:00am", auto_tick_seconds=1)
+def test_password_change_rejects_reused_history(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+) -> None:
+    """Test that changing the password to a previously used password is rejected."""
+    original_password = auth_account["password"]
+    next_password = "Rotated!Password2025"
+
+    # Rotate to a new password...
+    assert (
+        dioptra_client.users.change_current_user_password(
+            original_password, next_password
+        ).status_code
+        == HTTPStatus.OK
+    )
+
+    # ...then log back in with the new password so we have a valid session.
+    assert (
+        dioptra_client.auth.login(auth_account["username"], next_password).status_code
+        == HTTPStatus.OK
+    )
+
+    # Attempting to roll back to the original password must be rejected.
+    response = dioptra_client.users.change_current_user_password(
+        next_password, original_password
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+@freeze_time("Apr 1st, 2025 7:30am", auto_tick_seconds=1)
+def test_password_history_retains_full_depth_after_many_rotations(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+    monkeypatch: Any,
+) -> None:
+    """Regression: history must not be prematurely trimmed.
+
+    The initial Phase 1 implementation double-added each new entry to the
+    ``user.password_history`` collection (once via SQLAlchemy's
+    ``back_populates`` on construction, then again via an explicit
+    ``list.insert(0, entry)``). Combined with ``cascade=delete-orphan`` on
+    the ``User.password_history`` relationship, the inflated list length
+    caused the trim step to mark valid, still-in-window history rows as
+    orphans and delete them from the database.
+
+    This test shrinks ``PASSWORD_HISTORY_DEPTH`` so a few rotations are
+    enough to cross the trim threshold, then verifies that:
+
+    1. Every password within the depth window is still blocked on reuse.
+    2. The oldest password, which SHOULD be outside the window after
+       rotation, is accepted again — proving the trim itself works but is
+       not over-eager.
+    """
+    from dioptra.restapi.v1.users import service as users_service
+
+    monkeypatch.setattr(users_service, "PASSWORD_HISTORY_DEPTH", 3)
+
+    current = auth_account["password"]
+    rotations = [
+        "Rotation!NumberOne2025",
+        "Rotation!NumberTwo2025",
+        "Rotation!NumberThree2025",
+        "Rotation!NumberFour2025",
+    ]
+
+    # Walk through 4 rotations with depth=3 (buggy code would orphan-delete
+    # entries during this sequence).
+    for pwd in rotations:
+        assert (
+            dioptra_client.users.change_current_user_password(
+                current, pwd
+            ).status_code
+            == HTTPStatus.OK
+        )
+        assert (
+            dioptra_client.auth.login(
+                auth_account["username"], pwd
+            ).status_code
+            == HTTPStatus.OK
+        )
+        current = pwd
+
+    # The last 3 in-window passwords (the starting password is now out of
+    # window) MUST be blocked on reuse.
+    for in_window in rotations[:3]:
+        response = dioptra_client.users.change_current_user_password(
+            current, in_window
+        )
+        assert response.status_code == HTTPStatus.FORBIDDEN, (
+            f"Expected reuse of in-window password {in_window!r} to be "
+            f"rejected with 403, got {response.status_code}. This means the "
+            f"history was prematurely trimmed."
+        )
+
+    # The original password is now OUT of the 3-deep window, so it must be
+    # accepted again. (If it weren't, the trim would be broken in the other
+    # direction — never letting anything out of history.)
+    assert (
+        dioptra_client.users.change_current_user_password(
+            current, auth_account["password"]
+        ).status_code
+        == HTTPStatus.OK
+    )
