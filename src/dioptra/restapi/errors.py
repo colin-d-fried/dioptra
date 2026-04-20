@@ -926,6 +926,19 @@ def register_error_handlers(api: Api, **kwargs) -> None:  # noqa: C901
         log.debug(error.to_message())
         return error_result(error, http.HTTPStatus.FORBIDDEN, {})
 
+    @api.errorhandler(UserPasswordExpiredError)
+    def handle_user_password_expired_error(error: UserPasswordExpiredError):
+        # A "password expired" response tells an attacker the supplied
+        # credentials are valid (just stale). Wrap in a generic
+        # UserPasswordError so the JSON body — including the serialized
+        # ``error`` class name and the ``message`` — is byte-for-byte
+        # identical to a plain wrong-password 401. Must be registered before
+        # the UserPasswordError handler so flask-restx matches the more
+        # specific subclass first.
+        log.debug(error.to_message())
+        generic = UserPasswordError("Password authentication failed.")
+        return error_result(generic, http.HTTPStatus.UNAUTHORIZED, {})
+
     @api.errorhandler(UserPasswordError)
     def handle_user_password_error(error: UserPasswordError):
         log.debug(error.to_message())

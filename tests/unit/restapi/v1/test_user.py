@@ -807,6 +807,20 @@ def test_expired_password_does_not_trigger_lockout(
         body = response.json()
         assert "locked" not in body.get("message", "").lower()
 
+        # Security regression: an expired-but-correct password response must
+        # be indistinguishable from a wrong-password 401, otherwise an
+        # attacker confirms the supplied credentials are valid (just stale).
+        wrong_response = dioptra_client.auth.login(
+            username, correct_password + "-wrong"
+        )
+        assert wrong_response.status_code == HTTPStatus.UNAUTHORIZED
+        wrong_body = wrong_response.json()
+        assert body.get("error") == wrong_body.get("error")
+        assert body.get("message") == wrong_body.get("message")
+        assert body.get("detail") == wrong_body.get("detail")
+        assert "expired" not in body.get("message", "").lower()
+        assert "Expired" not in body.get("error", "")
+
 
 def test_password_change_rejects_weak_password(
     dioptra_client: DioptraClient[DioptraResponseProtocol],
