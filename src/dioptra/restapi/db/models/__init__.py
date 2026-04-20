@@ -72,7 +72,7 @@ from .resources import (
     shared_resource_tags_table,
 )
 from .tags import Tag
-from .users import User
+from .users import PasswordHistory, User
 
 __all__ = [
     "Artifact",
@@ -100,6 +100,7 @@ __all__ = [
     "JobMetric",
     "MlModel",
     "MlModelVersion",
+    "PasswordHistory",
     "Plugin",
     "PluginFile",
     "PluginPluginFile",

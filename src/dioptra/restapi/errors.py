@@ -19,6 +19,7 @@
 .. |Api| replace:: :py:class:`flask_restx.Api`
 """
 
+import datetime  # noqa: F401  (used in type annotations)
 import http
 import typing
 
@@ -563,6 +564,28 @@ class UserPasswordError(DioptraError):
         super().__init__(message)
 
 
+class PasswordComplexityError(DioptraError):
+    """The supplied password did not meet the configured complexity rules."""
+
+    def __init__(self, reasons: list[str]):
+        self.reasons = list(reasons)
+        super().__init__(
+            "Password does not meet complexity requirements: " + "; ".join(self.reasons)
+        )
+
+
+class AccountLockedError(DioptraError):
+    """The user's account is locked due to too many failed login attempts."""
+
+    def __init__(self, username: str, locked_until: "datetime.datetime"):
+        self.username = username
+        self.locked_until = locked_until
+        super().__init__(
+            f"Account '{username}' is locked until {locked_until.isoformat()} "
+            "due to too many failed login attempts."
+        )
+
+
 class JobStoreError(DioptraError):
     """JobStoreError Error."""
 
@@ -893,6 +916,25 @@ def register_error_handlers(api: Api, **kwargs) -> None:  # noqa: C901
     def handle_user_password_error(error: UserPasswordError):
         log.debug(error.to_message())
         return error_result(error, http.HTTPStatus.UNAUTHORIZED, {})
+
+    @api.errorhandler(PasswordComplexityError)
+    def handle_password_complexity_error(error: PasswordComplexityError):
+        log.debug(error.to_message())
+        return error_result(
+            error, http.HTTPStatus.BAD_REQUEST, {"reasons": list(error.reasons)}
+        )
+
+    @api.errorhandler(AccountLockedError)
+    def handle_account_locked_error(error: AccountLockedError):
+        log.debug(error.to_message())
+        return error_result(
+            error,
+            http.HTTPStatus.UNAUTHORIZED,
+            {
+                "username": error.username,
+                "locked_until": error.locked_until.isoformat(),
+            },
+        )
 
     @api.errorhandler(JobStoreError)
     def handle_mlflow_error(error: JobStoreError):

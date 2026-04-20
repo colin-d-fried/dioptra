@@ -49,7 +49,7 @@ from ..lib import actions, mock_mlflow, mock_rq
 @pytest.fixture
 @freeze_time("Apr 1st, 2025 5:00am", auto_tick_seconds=1)
 def registered_users(client: FlaskClient) -> dict[str, Any]:
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
     user1_response = actions.register_user(
         client, "user1", "user1@example.org", password
     ).get_json()

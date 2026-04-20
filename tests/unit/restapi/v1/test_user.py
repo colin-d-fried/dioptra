@@ -20,8 +20,11 @@ This module contains a set of tests that validate the CRUD operations and additi
 functionalities for the user entity. The tests ensure that the users can be registered,
 modified, and deleted as expected through the REST API.
 """
+
 from http import HTTPStatus
 from typing import Any
+
+from freezegun import freeze_time
 
 from dioptra.client.base import DioptraResponseProtocol
 from dioptra.client.client import DioptraClient
@@ -178,7 +181,7 @@ def assert_registering_existing_username_fails(
     Raises:
         AssertionError: If the response status code is not 409.
     """
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
     response = dioptra_client.users.create(
         username=existing_username, email=non_existing_email, password=password
     )
@@ -199,7 +202,7 @@ def assert_registering_existing_email_fails(
     Raises:
         AssertionError: If the response status code is not 409.
     """
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
     response = dioptra_client.users.create(
         username=non_existing_username, email=existing_email, password=password
     )
@@ -408,7 +411,7 @@ def test_create_user(dioptra_client: DioptraClient[DioptraResponseProtocol]) -> 
     """
     username = "user"
     email = "user@example.org"
-    password = "supersecurepassword"
+    password = "SuperSecure!Pwd123"
 
     # Posting a user returns CurrentUserSchema.
     user_response = dioptra_client.users.create(username, email, password).json()
@@ -597,7 +600,7 @@ def test_change_current_user_password(
     """
     username = auth_account["username"]
     old_password = auth_account["password"]
-    new_password = "new_password"
+    new_password = "NewSecure!Pwd456789"
     dioptra_client.users.change_current_user_password(old_password, new_password)
     assert_login_works(dioptra_client, username=username, password=new_password)
 
@@ -617,7 +620,7 @@ def test_change_user_password(
     user_id = registered_users["user2"]["id"]
     username = registered_users["user2"]["username"]
     old_password = registered_users["user2"]["password"]
-    new_password = "new_password"
+    new_password = "NewSecure!Pwd456789"
     dioptra_client.users.change_password_by_id(user_id, old_password, new_password)
     assert_login_works(dioptra_client, username=username, password=new_password)
 
@@ -642,3 +645,116 @@ def test_new_password_cannot_be_existing(
     assert_new_password_cannot_be_existing(dioptra_client, password)
     # test via /users/{user_id}
     assert_new_password_cannot_be_existing(dioptra_client, password, user_id)
+
+
+def test_cannot_register_with_weak_password(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+) -> None:
+    """Test that registering with a password that fails complexity rules is rejected."""
+    response = dioptra_client.users.create(
+        username="weakpwuser",
+        email="weakpwuser@example.org",
+        password="weakpass",
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+@freeze_time("Apr 1st, 2025 6:00am", auto_tick_seconds=1)
+def test_account_is_locked_after_repeated_failed_logins(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """Test that repeated failed login attempts lock the account.
+
+    The default lockout threshold is 5 failed attempts; after that, a correct
+    password should still be rejected with UNAUTHORIZED until the lockout expires.
+    """
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = correct_password + "-wrong"
+
+    for _ in range(5):
+        response = dioptra_client.auth.login(username, wrong_password)
+        assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+    # Account should now be locked; even the correct password is rejected.
+    locked_response = dioptra_client.auth.login(username, correct_password)
+    assert locked_response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+@freeze_time("Apr 1st, 2025 6:30am", auto_tick_seconds=1)
+def test_successful_login_resets_failed_attempts(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """Test that a successful login clears the failed_login_attempts counter."""
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = correct_password + "-wrong"
+
+    # A few bad attempts...
+    for _ in range(3):
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+
+    # ...then a good one resets the counter.
+    assert (
+        dioptra_client.auth.login(username, correct_password).status_code
+        == HTTPStatus.OK
+    )
+
+    # We can fail up to the threshold again without being locked out on the next try.
+    for _ in range(4):
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+    assert (
+        dioptra_client.auth.login(username, correct_password).status_code
+        == HTTPStatus.OK
+    )
+
+
+def test_password_change_rejects_weak_password(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+) -> None:
+    """Test that changing the password to one that fails complexity rules is rejected."""
+    response = dioptra_client.users.change_current_user_password(
+        auth_account["password"], "short"
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+@freeze_time("Apr 1st, 2025 7:00am", auto_tick_seconds=1)
+def test_password_change_rejects_reused_history(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    auth_account: dict[str, Any],
+) -> None:
+    """Test that changing the password to a previously used password is rejected."""
+    original_password = auth_account["password"]
+    next_password = "Rotated!Password2025"
+
+    # Rotate to a new password...
+    assert (
+        dioptra_client.users.change_current_user_password(
+            original_password, next_password
+        ).status_code
+        == HTTPStatus.OK
+    )
+
+    # ...then log back in with the new password so we have a valid session.
+    assert (
+        dioptra_client.auth.login(auth_account["username"], next_password).status_code
+        == HTTPStatus.OK
+    )
+
+    # Attempting to roll back to the original password must be rejected.
+    response = dioptra_client.users.change_current_user_password(
+        next_password, original_password
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN

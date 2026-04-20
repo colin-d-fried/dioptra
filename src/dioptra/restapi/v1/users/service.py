@@ -30,6 +30,7 @@ from dioptra.restapi.db.repository.utils import DeletionPolicy
 from dioptra.restapi.db.unit_of_work import UnitOfWork
 from dioptra.restapi.errors import (
     NoCurrentUserError,
+    PasswordComplexityError,
     QueryParameterValidationError,
     UserDoesNotExistError,
     UserPasswordChangeError,
@@ -40,6 +41,10 @@ from dioptra.restapi.v1.plugin_parameter_types.service import (
     BuiltinPluginParameterTypeService,
 )
 from dioptra.restapi.v1.shared.password_service import PasswordService
+from dioptra.restapi.v1.shared.password_validator import (
+    PasswordComplexityError as _PasswordComplexityValidationError,
+)
+from dioptra.restapi.v1.shared.password_validator import PasswordValidator
 from dioptra.restapi.v1.shared.search_parser import parse_search_text
 
 LOGGER: BoundLogger = structlog.stdlib.get_logger()
@@ -52,6 +57,27 @@ DEFAULT_GROUP_PERMISSIONS: Final[dict[str, Any]] = {
     "share_write": False,
 }
 DAYS_TO_EXPIRE_PASSWORD_DEFAULT: Final[int] = 365
+PASSWORD_HISTORY_DEPTH: Final[int] = 12
+
+
+def _validate_password_complexity(
+    password: str,
+    username: str | None,
+    email_address: str | None,
+) -> None:
+    """Validate a password against the configured complexity rules.
+
+    Translates the module-level :class:`PasswordComplexityError` raised by the
+    validator into the application's :class:`dioptra.restapi.errors.PasswordComplexityError`
+    so that Flask can return a structured HTTP response.
+    """
+    validator = PasswordValidator()
+    try:
+        validator.validate(
+            password=password, username=username, email_address=email_address
+        )
+    except _PasswordComplexityValidationError as exc:
+        raise PasswordComplexityError(exc.reasons) from exc
 
 
 class UserService(object):
@@ -117,6 +143,10 @@ class UserService(object):
             raise QueryParameterValidationError(
                 "password", "equivalence", password="***", confirmation="***"
             )
+
+        _validate_password_complexity(
+            password=password, username=username, email_address=email_address
+        )
 
         hashed_password = self._user_password_service.hash(password, log=log)
         new_user: models.User = models.User(
@@ -507,12 +537,29 @@ class UserPasswordService(object):
                 "Confirmation password does not match new password."
             )
 
+        _validate_password_complexity(
+            password=new_password,
+            username=user.username,
+            email_address=user.email_address,
+        )
+
         if self._password_service.verify(
             password=new_password, hashed_password=str(user.password), log=log
         ):
             raise UserPasswordChangeError("New password matches old password.")
 
+        for entry in user.password_history:
+            if self._password_service.verify(
+                password=new_password,
+                hashed_password=entry.hashed_password,
+                log=log,
+            ):
+                raise UserPasswordChangeError(
+                    "New password matches a previously used password."
+                )
+
         timestamp = datetime.datetime.now(tz=datetime.timezone.utc)
+        previous_hash = str(user.password)
         user.password = self._password_service.hash(password=new_password, log=log)
         user.alternative_id = uuid.uuid4()
         user.last_modified_on = timestamp
@@ -520,10 +567,23 @@ class UserPasswordService(object):
             days=DAYS_TO_EXPIRE_PASSWORD_DEFAULT
         )
 
+        self._record_password_history(user=user, hashed_password=previous_hash)
+
         if commit:
             self._uow.commit()
 
         return {"status": "Password Change Success", "username": user.username}
+
+    def _record_password_history(self, user: models.User, hashed_password: str) -> None:
+        """Append a password hash to the user's history and trim to the configured depth."""
+        entry = models.PasswordHistory(hashed_password=hashed_password, user=user)
+        user.password_history.insert(0, entry)
+        self._uow.session.add(entry)
+        # password_history is ordered newest-first via relationship order_by;
+        # trim anything past the configured depth.
+        if len(user.password_history) > PASSWORD_HISTORY_DEPTH:
+            for stale in user.password_history[PASSWORD_HISTORY_DEPTH:]:
+                user.password_history.remove(stale)
 
     def hash(self, password: str, **kwargs) -> str:
         """Hash a password.

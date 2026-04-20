@@ -18,7 +18,7 @@ import datetime
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import ForeignKey, select
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from dioptra.restapi.db.db import (
@@ -57,6 +57,10 @@ class User(db.Model):  # type: ignore[name-defined]
     last_modified_on: Mapped[datetimetz] = mapped_column(init=False, nullable=False)
     last_login_on: Mapped[optionaldatetimetz] = mapped_column(init=False, nullable=True)
     password_expire_on: Mapped[datetimetz] = mapped_column(init=False, nullable=False)
+    failed_login_attempts: Mapped[int] = mapped_column(
+        init=False, nullable=False, default=0
+    )
+    locked_until: Mapped[optionaldatetimetz] = mapped_column(init=False, nullable=True)
 
     # Derived fields (read-only)
     is_deleted: Mapped[bool] = column_property(
@@ -88,6 +92,12 @@ class User(db.Model):  # type: ignore[name-defined]
     )
     created_tags: Mapped[list["Tag"]] = relationship(init=False, viewonly=True)
     locks: Mapped[list["UserLock"]] = relationship(init=False, back_populates="user")
+    password_history: Mapped[list["PasswordHistory"]] = relationship(
+        init=False,
+        back_populates="user",
+        order_by="PasswordHistory.created_on.desc()",
+        cascade="all, delete-orphan",
+    )
 
     # Initialize default values using dataclass __post_init__ method
     # https://docs.python.org/3/library/dataclasses.html#dataclasses.__post_init__
@@ -98,6 +108,8 @@ class User(db.Model):  # type: ignore[name-defined]
         self.last_modified_on = timestamp
         self.last_login_on = None
         self.password_expire_on = timestamp + datetime.timedelta(days=365)
+        self.failed_login_attempts = 0
+        self.locked_until = None
 
     @property
     def is_authenticated(self) -> bool:
@@ -121,3 +133,28 @@ class User(db.Model):  # type: ignore[name-defined]
             The user's identifier as a string.
         """
         return str(self.alternative_id)
+
+
+class PasswordHistory(db.Model):  # type: ignore[name-defined]
+    """A record of a previously used password hash for a user.
+
+    Used to enforce the "no password reuse" policy by checking candidate new
+    passwords against the user's recent history.
+    """
+
+    __tablename__ = "user_password_history"
+
+    password_history_id: Mapped[intpk] = mapped_column(init=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        init=False,
+        nullable=False,
+        index=True,
+    )
+    hashed_password: Mapped[text_] = mapped_column(nullable=False)
+    created_on: Mapped[datetimetz] = mapped_column(init=False, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="password_history")
+
+    def __post_init__(self) -> None:
+        self.created_on = datetime.datetime.now(tz=datetime.timezone.utc)
