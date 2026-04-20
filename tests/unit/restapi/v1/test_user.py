@@ -693,6 +693,14 @@ def test_account_is_locked_after_repeated_failed_logins(
     assert username not in message
     assert "locked" not in message.lower()
     assert "until" not in message.lower()
+    # The serialized ``error`` field is ``error.__class__.__name__``; if the
+    # handler passes an ``AccountLockedError`` through directly, an attacker
+    # can read ``"AccountLockedError"`` here and distinguish lockout from
+    # wrong-password responses. The handler must forward a generic
+    # ``UserPasswordError`` so the class name matches a plain 401.
+    error_field = body.get("error", "")
+    assert "Locked" not in error_field
+    assert "Account" not in error_field
 
 
 @freeze_time("Apr 1st, 2025 6:30am", auto_tick_seconds=1)

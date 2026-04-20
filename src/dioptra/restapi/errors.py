@@ -942,13 +942,18 @@ def register_error_handlers(api: Api, **kwargs) -> None:  # noqa: C901
     def handle_account_locked_error(error: AccountLockedError):
         # Log the structured lockout info server-side only; the response MUST
         # NOT include the username or the lockout expiry (see AccountLockedError
-        # docstring for rationale).
+        # docstring for rationale). We also forward the response through a
+        # generic UserPasswordError so ``error_result`` serializes
+        # ``error.__class__.__name__`` as ``"UserPasswordError"`` — otherwise
+        # ``"AccountLockedError"`` would leak the lockout state in the
+        # ``error`` field of the JSON response and defeat indistinguishability.
         log.debug(
             "account locked login rejected",
             username=error.username,
             locked_until=error.locked_until.isoformat(),
         )
-        return error_result(error, http.HTTPStatus.UNAUTHORIZED, {})
+        generic = UserPasswordError("Password authentication failed.")
+        return error_result(generic, http.HTTPStatus.UNAUTHORIZED, {})
 
     @api.errorhandler(JobStoreError)
     def handle_mlflow_error(error: JobStoreError):
