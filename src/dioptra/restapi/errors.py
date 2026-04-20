@@ -564,6 +564,13 @@ class UserPasswordError(DioptraError):
         super().__init__(message)
 
 
+class UserPasswordExpiredError(UserPasswordError):
+    """The supplied password is correct but has passed its expiration date."""
+
+    def __init__(self, message: str = "Password expired."):
+        super().__init__(message)
+
+
 class PasswordComplexityError(DioptraError):
     """The supplied password did not meet the configured complexity rules."""
 

@@ -719,6 +719,75 @@ def test_successful_login_resets_failed_attempts(
     )
 
 
+def test_lockout_expiry_grants_fresh_attempt_window(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """After a lockout window elapses, a single wrong password must NOT immediately re-lock.
+
+    Regression test: previously the counter stayed at 5 after expiry, so the
+    first post-expiry wrong attempt bumped it to 6 >= max_attempts and the
+    account was re-locked with zero tolerance.
+    """
+    user = registered_users["user3"]
+    username = user["username"]
+    correct_password = user["password"]
+    wrong_password = "BadGuess!Attempt2025"
+
+    with freeze_time("Apr 1st, 2025 8:00am", auto_tick_seconds=1):
+        for _ in range(5):
+            assert (
+                dioptra_client.auth.login(username, wrong_password).status_code
+                == HTTPStatus.UNAUTHORIZED
+            )
+        # account is now locked
+        assert (
+            dioptra_client.auth.login(username, correct_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+
+    # Advance well past the 30-min default lockout window.
+    with freeze_time("Apr 1st, 2025 9:30am", auto_tick_seconds=1):
+        # A single wrong attempt after expiry must NOT immediately re-lock.
+        assert (
+            dioptra_client.auth.login(username, wrong_password).status_code
+            == HTTPStatus.UNAUTHORIZED
+        )
+        # The counter was reset on expiry, so the correct password still works.
+        assert (
+            dioptra_client.auth.login(username, correct_password).status_code
+            == HTTPStatus.OK
+        )
+
+
+def test_expired_password_does_not_trigger_lockout(
+    dioptra_client: DioptraClient[DioptraResponseProtocol],
+    registered_users: dict[str, Any],
+) -> None:
+    """An expired-but-correct password must not count as a failed login attempt.
+
+    Regression test: previously UserPasswordService.authenticate() raised the
+    same UserPasswordError for both wrong-password and expired-password cases,
+    so an expired correct password would increment failed_login_attempts and
+    eventually lock the account.
+    """
+    user = registered_users["user2"]
+    username = user["username"]
+    correct_password = user["password"]
+
+    # Jump more than a year forward so password_expire_on (now + 1 year) is past.
+    response = None
+    with freeze_time("Jan 1st, 2027 12:00pm", auto_tick_seconds=1):
+        for _ in range(7):
+            response = dioptra_client.auth.login(username, correct_password)
+            assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+        # Account must NOT be locked — counter should not have moved.
+        assert response is not None
+        body = response.json()
+        assert "locked" not in body.get("message", "").lower()
+
+
 def test_password_change_rejects_weak_password(
     dioptra_client: DioptraClient[DioptraResponseProtocol],
     auth_account: dict[str, Any],

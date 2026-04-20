@@ -35,6 +35,7 @@ from dioptra.restapi.errors import (
     UserDoesNotExistError,
     UserPasswordChangeError,
     UserPasswordError,
+    UserPasswordExpiredError,
 )
 from dioptra.restapi.v1.groups.service import GroupMemberService
 from dioptra.restapi.v1.plugin_parameter_types.service import (
@@ -493,7 +494,7 @@ class UserPasswordService(object):
             raise UserPasswordError("Password authentication failed.")
 
         if expiration_date < current_timestamp:
-            raise UserPasswordError("Password expired.")
+            raise UserPasswordExpiredError()
 
         return authenticated
 

@@ -32,6 +32,7 @@ from dioptra.restapi.errors import (
     AccountLockedError,
     UserDoesNotExistError,
     UserPasswordError,
+    UserPasswordExpiredError,
 )
 from dioptra.restapi.v1.users.service import UserPasswordService
 
@@ -122,6 +123,11 @@ class AuthService(object):
                 username=user.username, locked_until=user.locked_until
             )
 
+        if user.locked_until is not None and user.locked_until <= now:
+            with self._uow:
+                user.failed_login_attempts = 0
+                user.locked_until = None
+
         try:
             self._user_password_service.authenticate(
                 password=password,
@@ -130,6 +136,8 @@ class AuthService(object):
                 error_if_failed=True,
                 log=log,
             )
+        except UserPasswordExpiredError:
+            raise
         except UserPasswordError:
             self._register_failed_login(user=user, log=log)
             raise
