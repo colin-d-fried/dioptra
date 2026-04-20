@@ -682,6 +682,18 @@ def test_account_is_locked_after_repeated_failed_logins(
     locked_response = dioptra_client.auth.login(username, correct_password)
     assert locked_response.status_code == HTTPStatus.UNAUTHORIZED
 
+    # Security regression: the response MUST NOT leak the username or the
+    # lockout expiry timestamp (would enable enumeration + lets a credential
+    # stuffer know the exact moment the lockout expires). It must also be
+    # indistinguishable from a plain wrong-password 401.
+    body = locked_response.json()
+    assert "username" not in body.get("detail", {})
+    assert "locked_until" not in body.get("detail", {})
+    message = body.get("message", "")
+    assert username not in message
+    assert "locked" not in message.lower()
+    assert "until" not in message.lower()
+
 
 @freeze_time("Apr 1st, 2025 6:30am", auto_tick_seconds=1)
 def test_successful_login_resets_failed_attempts(

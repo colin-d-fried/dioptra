@@ -22,6 +22,7 @@ from sqlalchemy import ForeignKey, select
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from dioptra.restapi.db.db import (
+    bigint,
     datetimetz,
     db,
     guid,
@@ -145,7 +146,7 @@ class PasswordHistory(db.Model):  # type: ignore[name-defined]
     __tablename__ = "user_password_history"
 
     password_history_id: Mapped[intpk] = mapped_column(init=False)
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[bigint] = mapped_column(
         ForeignKey("users.user_id", ondelete="CASCADE"),
         init=False,
         nullable=False,
